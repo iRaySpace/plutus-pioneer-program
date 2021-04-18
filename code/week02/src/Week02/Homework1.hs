@@ -1,54 +1,55 @@
-{-# LANGUAGE DataKinds           #-}
-{-# LANGUAGE FlexibleContexts    #-}
-{-# LANGUAGE NoImplicitPrelude   #-}
-{-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TemplateHaskell     #-}
-{-# LANGUAGE TypeApplications    #-}
-{-# LANGUAGE TypeFamilies        #-}
-{-# LANGUAGE TypeOperators       #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 
-module Week02.Homework1 where
-
-import           Control.Monad        hiding (fmap)
-import           Data.Map             as Map
-import           Data.Text            (Text)
-import           Data.Void            (Void)
-import           Plutus.Contract      hiding (when)
-import           PlutusTx             (Data (..))
+import Control.Monad hiding (fmap)
+import Data.Map as Map
+import Data.Text (Text)
+import Data.Void (Void)
+import Plutus.Contract hiding (when)
 import qualified PlutusTx
-import           PlutusTx.Prelude     hiding (Semigroup(..), unless)
-import           Ledger               hiding (singleton)
-import           Ledger.Constraints   as Constraints
-import qualified Ledger.Scripts       as Scripts
+import PlutusTx.Prelude hiding (Semigroup(..), unless)
+import Ledger hiding (Singleton)
+import Ledger.Constraints as Constraints
+import qualified Ledger.Scripts as Scripts
 import qualified Ledger.Typed.Scripts as Scripts
-import           Ledger.Ada           as Ada
-import           Playground.Contract  (printJson, printSchemas, ensureKnownCurrencies, stage)
-import           Playground.TH        (mkKnownCurrencies, mkSchemaDefinitions)
-import           Playground.Types     (KnownCurrency (..))
-import           Prelude              (Semigroup (..))
-import           Text.Printf          (printf)
+import Ledger.Ada as Ada
+import Playground.Contract (printJson, printSchemas, ensureKnownCurrencies, stage)
+import Playground.TH (mkKnownCurrencies, mkSchemaDefinitions)
+import Playground.Types (KnownCurrency (..))
+import Prelude (Semigroup (..))
+import Text.Printf (printf)
 
 {-# INLINABLE mkValidator #-}
--- This should validate if and only if the two Booleans in the redeemer are equal!
 mkValidator :: () -> (Bool, Bool) -> ValidatorCtx -> Bool
-mkValidator _ _ _ = True -- FIX ME!
+mkValidator () (x,y) _ = traceIfFalse "x is not equal to y" $ x == y
 
 data Typed
 instance Scripts.ScriptType Typed where
--- Implement the instance!
+    type instance DatumType Typed = ()
+    type instance RedeemerType Typed = (Bool, Bool)
 
 inst :: Scripts.ScriptInstance Typed
-inst = undefined -- FIX ME!
+inst = Scripts.validator @Typed
+    $$(PlutusTx.compile [|| mkValidator ||])
+    $$(PlutusTx.compile [|| wrap ||])
+  where
+    wrap = Scripts.wrapValidator @() @(Bool, Bool)
 
 validator :: Validator
-validator = undefined -- FIX ME!
+validator = Scripts.validatorScript inst
 
 valHash :: Ledger.ValidatorHash
-valHash = undefined -- FIX ME!
+valHash = Scripts.validatorHash validator
 
 scrAddress :: Ledger.Address
-scrAddress = undefined -- FIX ME!
+scrAddress = ScriptAddress valHash
 
 type GiftSchema =
     BlockchainActions
@@ -65,20 +66,20 @@ give amount = do
 grab :: forall w s e. (HasBlockchainActions s, AsContractError e) => (Bool, Bool) -> Contract w s e ()
 grab bs = do
     utxos <- utxoAt scrAddress
-    let orefs   = fst <$> Map.toList utxos
-        lookups = Constraints.unspentOutputs utxos      <>
+    let orefs = fst <$> Map.toList utxos
+        lookups = Constraints.unspentOutputs utxos <>
                   Constraints.otherScript validator
         tx :: TxConstraints Void Void
-        tx      = mconcat [mustSpendScriptOutput oref $ Redeemer $ PlutusTx.toData bs | oref <- orefs]
+        tx = mconcat [mustSpendScriptOutput oref $ Redeemer $ PlutusTx.toData bs | oref <- orefs]
     ledgerTx <- submitTxConstraintsWith @Void lookups tx
     void $ awaitTxConfirmed $ txId ledgerTx
     logInfo @String $ "collected gifts"
 
 endpoints :: Contract () GiftSchema Text ()
 endpoints = (give' `select` grab') >> endpoints
-  where
-    give' = endpoint @"give" >>= give
-    grab' = endpoint @"grab" >>= grab
+    where
+        give' = endpoint @"give" >>= give
+        grab' = endpoint @"grab" >>= grab
 
 mkSchemaDefinitions ''GiftSchema
 
